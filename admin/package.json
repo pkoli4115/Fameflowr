@@ -10,10 +10,12 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-icons": "^5.5.0",
-    "react-router-dom": "^7.7.1"
+    "react-router-dom": "^7.7.1",
+    "react-toastify": "^11.0.5"
   },
   "devDependencies": {
     "@types/react-router-dom": "^5.3.3",
+    "@types/react-toastify": "^4.0.2",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.16",
     "postcss": "^8.4.31",

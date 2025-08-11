@@ -1,12 +1,10 @@
 // src/firebase/firebaseConfig.ts
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, updateDoc } from "firebase/firestore";
-import {
-  getAuth,
-  signInWithEmailAndPassword,
-  onAuthStateChanged,
-} from "firebase/auth";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
+import { getStorage } from "firebase/storage";
 
+// --- Your Firebase project config ---
 const firebaseConfig = {
   apiKey: "AIzaSyCSMShYiEsDuW4Nuk0k2qV3_xhGhwJEOW4",
   authDomain: "fameflowr-217f9.firebaseapp.com",
@@ -17,11 +15,13 @@ const firebaseConfig = {
   measurementId: "G-PYMXMKM3CC",
 };
 
+// --- Initialize ---
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+const storage = getStorage(app);
 
-// ---- dev-only console helpers (remove for production) ----
+// --- Dev-only console helpers (guarded) ---
 declare global {
   interface Window {
     ffAuth?: ReturnType<typeof getAuth>;
@@ -34,14 +34,15 @@ declare global {
   }
 }
 
-window.ffAuth = auth;
-window.ffDb = db;
-window.ffDoc = doc;
-window.ffGetDoc = getDoc;
-window.ffUpdateDoc = updateDoc;
-window.ffSignIn = (email: string, password: string) =>
-  signInWithEmailAndPassword(auth, email, password);
-window.ffOnAuth = (cb: (u: any) => void) => onAuthStateChanged(auth, cb);
-// ----------------------------------------------------------
+if (typeof window !== "undefined" && import.meta.env && import.meta.env.DEV) {
+  window.ffAuth = auth;
+  window.ffDb = db;
+  window.ffDoc = doc;
+  window.ffGetDoc = getDoc;
+  window.ffUpdateDoc = updateDoc;
+  window.ffSignIn = (email: string, password: string) => signInWithEmailAndPassword(auth, email, password);
+  window.ffOnAuth = (cb: (u: any) => void) => onAuthStateChanged(auth, cb);
+}
 
-export { app, db, auth };
+// --- Exports used across the app ---
+export { app, db, auth, storage };
