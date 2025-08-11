@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+functions/node_modules/
+
+# Build output
+dist/
+build/
+.vite/
+
+# Firebase configs and keys
+serviceAccountKey.json
+*.keystore
+*.jks
+
+# Local env files
+.env
+.env.local
+
+# IDE settings
+.vscode/
+.idea/

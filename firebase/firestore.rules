@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return request.auth != null &&
+        (request.auth.token.role in ['admin','superadmin'] ||
+         request.auth.token.admin == true);
+    }
+
+    // Return LISTS (not sets)
+    function userEditableKeys() {
+      return ['name','photoURL','bio','phone'];
+    }
+
+    function adminEditableKeys() {
+      return ['flagged','blocked','status','role','name','notes','deleted','deletedAt','__lastActor'];
+    }
+
+    match /users/{userId} {
+      allow read: if true;
+
+      allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      // User can edit only their own allowed fields
+      allow update: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data)
+             .changedKeys()
+             .hasOnly(userEditableKeys());
+
+      // Admin can edit union of existing fields + adminEditableKeys
+      // Use LIST concat (no sets, no union).
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data)
+             .changedKeys()
+             .hasOnly(resource.data.keys().concat(adminEditableKeys()));
+
+      allow delete: if isAdmin();
+    }
+
+    // lowercase collection (what your code writes)
+    match /auditlogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // optional camelCase support if you ever use it
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
+    }
+  }
+}

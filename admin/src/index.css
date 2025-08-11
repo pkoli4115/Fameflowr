@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- OPTIONAL: Custom styles go below this line if needed ---- */
+/* For example, special logo, overrides, etc. */
+/* But for a clean Tailwind-only look, you don't need anything else here! */

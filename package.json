@@ -1,0 +1,24 @@
+{
+  "name": "fameflowr",
+  "version": "1.0.0",
+  "description": "This is the starter frontend for Fameflowr with Firebase Hosting and Tailwind CSS.",
+  "main": "seedDemoData.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pkoli4115/Flameflowr.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/pkoli4115/Flameflowr/issues"
+  },
+  "homepage": "https://github.com/pkoli4115/Flameflowr#readme",
+  "dependencies": {
+    "firebase-admin": "^13.4.0",
+    "react-hot-toast": "^2.5.2"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "fameflowr-functions",
+  "private": true,
+  "engines": {
+    "node": "18"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "clean": "rimraf lib",
+    "build": "tsc",
+    "dev": "npm run build -- --watch",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "emulate": "firebase emulators:start --only functions",
+    "deploy": "npm run build && firebase deploy --only functions",
+    "deploy:setUserDefaults": "npm run build && firebase deploy --only functions:setUserDefaults",
+    "deploy:all": "npm run build && firebase deploy",
+    "backfill:deleted": "ts-node scripts/backfillDeletedField.ts"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.2.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2",
+    "rimraf": "^5.0.7"
+  }
+}
