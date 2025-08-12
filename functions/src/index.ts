@@ -1,77 +1,45 @@
-// functions/src/index.ts
-import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
+import * as functions from "firebase-functions";
+
+import { aggregateCampaignMetrics, scheduledAggregateCampaignMetrics } from "./aggregateCampaignMetrics";
+import { onCampaignWriteAudit as auditCampaigns } from "./auditLogs";
+import { setUserDefaults } from "./setUserDefaults";
+import { syncBlockedToAuth } from "./syncBlockedToAuth";
+import { togglePublish } from "./togglePublish";
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
-const db = admin.firestore();
+// Firestore trigger to aggregate campaign metrics when a campaign is written
+export const onCampaignWriteFn = functions
+  .region("asia-south1")
+  .firestore.document("campaigns/{campaignId}")
+  .onWrite(aggregateCampaignMetrics);
 
-/**
- * When a new user doc is created, ensure it has default flags.
- */
-export const setUserDefaults = functions.firestore
-  .document("users/{uid}")
-  .onCreate(async (snap) => {
-    const data = snap.data() || {};
-    const updates: any = {};
+// Scheduled function to run daily aggregations
+export const scheduledAggregateCampaignMetricsFn = functions
+  .region("asia-south1")
+  .pubsub.schedule("every 24 hours")
+  .onRun(scheduledAggregateCampaignMetrics);
 
-    if (typeof data.deleted === "undefined") {
-      updates.deleted = false;
-      updates.deletedAt = null;
-    }
-    if (typeof data.blocked === "undefined") {
-      updates.blocked = false;
-    }
-    if (typeof data.flagged === "undefined") {
-      updates.flagged = false;
-    }
+// Firestore trigger to run audits when a campaign changes
+export const auditCampaignsFn = functions
+  .region("asia-south1")
+  .firestore.document("campaigns/{campaignId}")
+  .onWrite(auditCampaigns);
 
-    if (Object.keys(updates).length > 0) {
-      await snap.ref.update(updates);
-    }
-  });
+// Firestore trigger to set defaults when a user is created
+export const setUserDefaultsFn = functions
+  .region("asia-south1")
+  .firestore.document("users/{userId}")
+  .onCreate(setUserDefaults);
 
-/**
- * When /users/{id}.blocked changes:
- *  - Update Firebase Auth disabled flag
- *  - Write an audit entry
- */
-export const syncBlockedToAuth = functions.firestore
-  .document("users/{userId}")
-  .onWrite(async (change, context) => {
-    const userId = context.params.userId as string;
+// Firestore trigger to sync blocked users to Auth
+export const syncBlockedToAuthFn = functions
+  .region("asia-south1")
+  .firestore.document("users/{userId}")
+  .onWrite(syncBlockedToAuth);
 
-    const before = change.before.exists ? (change.before.data() as any) : {};
-    const after = change.after.exists ? (change.after.data() as any) : {};
-
-    const wasBlocked = !!before.blocked;
-    const isBlocked = !!after.blocked;
-
-    if (wasBlocked === isBlocked) return;
-
-    // 1) Try to disable/enable the Auth user
-    try {
-      await admin.auth().updateUser(userId, { disabled: isBlocked });
-    } catch (e) {
-      // Not all doc IDs map to Auth UIDs — best-effort only
-      console.warn("updateUser failed for", userId, e);
-    }
-
-    // 2) Best-effort audit log
-    try {
-      await db.collection("auditlogs").add({
-        ts: admin.firestore.FieldValue.serverTimestamp(),
-        actorUid: after?.__lastActor?.uid ?? null,
-        actorEmail: after?.__lastActor?.email ?? null,
-        action: isBlocked ? "block" : "unblock",
-        targetId: userId,
-        before: { blocked: wasBlocked },
-        after: { blocked: isBlocked },
-        source: "function/syncBlockedToAuth",
-      });
-    } catch (e) {
-      console.warn("audit log write failed", e);
-    }
-  });
+// Callable: publish/unpublish
+export const togglePublishFn = togglePublish;

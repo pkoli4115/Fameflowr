@@ -1,24 +1,42 @@
 {
   "name": "fameflowr",
   "version": "1.0.0",
-  "description": "This is the starter frontend for Fameflowr with Firebase Hosting and Tailwind CSS.",
+  "description": "Fameflowr Admin Panel and Frontend with Firebase Hosting, Tailwind CSS, and Cloud Functions integration.",
   "main": "seedDemoData.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pkoli4115/Flameflowr.git"
+    "url": "git+https://github.com/pkoli4115/Fameflowr.git"
   },
-  "keywords": [],
+  "keywords": [
+    "fameflowr",
+    "firebase",
+    "tailwind",
+    "react",
+    "admin-panel"
+  ],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/pkoli4115/Flameflowr/issues"
+    "url": "https://github.com/pkoli4115/Fameflowr/issues"
   },
-  "homepage": "https://github.com/pkoli4115/Flameflowr#readme",
+  "homepage": "https://github.com/pkoli4115/Fameflowr#readme",
+  "scripts": {
+    "dev": "cd admin && npm run dev",
+    "build": "cd admin && npm run build",
+    "serve": "firebase serve",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:functions": "cd functions && npm run build && firebase deploy --only functions",
+    "deploy:all": "npm run build && firebase deploy",
+    "seed:aggregates": "cd functions && npm run seed:aggregates"
+  },
   "dependencies": {
     "firebase-admin": "^13.4.0",
     "react-hot-toast": "^2.5.2"
+  },
+  "devDependencies": {
+    "firebase-tools": "^13.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

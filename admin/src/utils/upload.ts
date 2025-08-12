@@ -1,21 +1,25 @@
-import { storage } from "../firebase/firebaseConfig";
-import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
+// =============================
+// FILE: src/utils/upload.ts
+// =============================
+// Optional helper if you store images in Firebase Storage. This uses the Web SDK v10 style import path.
+import { getStorage, ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
-export const uploadWithProgress = (path: string, file: File, onProgress?: (p: number)=>void) =>
-  new Promise<string>((resolve, reject) => {
-    const storageRef = ref(storage, path);
-    const task = uploadBytesResumable(storageRef, file);
-
-    task.on("state_changed",
+export async function uploadWithProgress(path: string, file: File, onProgress?: (p: number) => void): Promise<string> {
+  const storage = getStorage();
+  const storageRef = ref(storage, path);
+  const task = uploadBytesResumable(storageRef, file);
+  return new Promise((resolve, reject) => {
+    task.on(
+      "state_changed",
       (snap) => {
-        if (!onProgress) return;
-        const p = (snap.bytesTransferred / snap.totalBytes) * 100;
-        onProgress(Math.round(p));
+        const pct = (snap.bytesTransferred / snap.totalBytes) * 100;
+        if (onProgress) onProgress(pct);
       },
-      reject,
+      (err) => reject(err),
       async () => {
         const url = await getDownloadURL(task.snapshot.ref);
         resolve(url);
       }
     );
   });
+}

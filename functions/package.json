@@ -1,9 +1,7 @@
 {
   "name": "fameflowr-functions",
   "private": true,
-  "engines": {
-    "node": "18"
-  },
+  "engines": { "node": "18" },
   "main": "lib/index.js",
   "scripts": {
     "clean": "rimraf lib",
@@ -11,10 +9,12 @@
     "dev": "npm run build -- --watch",
     "serve": "npm run build && firebase emulators:start --only functions",
     "emulate": "firebase emulators:start --only functions",
-    "deploy": "npm run build && firebase deploy --only functions",
-    "deploy:setUserDefaults": "npm run build && firebase deploy --only functions:setUserDefaults",
-    "deploy:all": "npm run build && firebase deploy",
-    "backfill:deleted": "ts-node scripts/backfillDeletedField.ts"
+    "deploy": "firebase deploy --only functions",
+    "deploy:setUserDefaults": "firebase deploy --only functions:setUserDefaults",
+    "deploy:all": "firebase deploy",
+    "backfill:deleted": "ts-node scripts/backfillDeletedField.ts",
+    "seed:aggregates": "node scripts/seedAggregates.js",
+    "predeploy": "npm run clean && npm run build"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0",
@@ -22,8 +22,8 @@
   },
   "devDependencies": {
     "@types/node": "^24.2.1",
+    "rimraf": "^5.0.7",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.2",
-    "rimraf": "^5.0.7"
+    "typescript": "^5.9.2"
   }
 }

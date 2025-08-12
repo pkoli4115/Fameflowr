@@ -1,62 +1,72 @@
-export type CampaignStatus = "Scheduled" | "Active" | "Ended";
-export type CampaignCategory = "Outreach" | "Contest" | "Seasonal" | "Launch" | "Community" | "Other";
+// =============================
+// FILE: src/types/campaign.ts
+// =============================
+export type CampaignStatus = "draft" | "scheduled" | "active" | "completed" | "archived";
 export type CampaignVisibility = "public" | "private";
-
-export interface CampaignResource {
-  title: string;
-  link: string;
-}
+export type CampaignCategory = string; // alias; tighten to a union later if needed
 
 export interface Campaign {
   id: string;
   title: string;
   description?: string;
-  imageUrl?: string;
-
-  startAt: string;   // ISO
-  endAt: string;     // ISO
-  status: CampaignStatus;
-
-  // Engagement
-  participantsCount: number;
-  clicks?: number;
-  likes?: number;
-  shares?: number;
-
-  // New metadata
   category?: CampaignCategory;
-  goal?: string;
-  actionsRequired?: string[];
-  resources?: CampaignResource[];
-  visibility?: CampaignVisibility;
-
-  isDeleted: boolean;
+  visibility: CampaignVisibility;
+  status: CampaignStatus;
+  coverImageUrl?: string;
+  startAt?: string; // ISO string
+  endAt?: string;   // ISO string
   createdAt: string; // ISO
   updatedAt: string; // ISO
+  createdByUid: string;
 }
 
 export interface NewCampaignInput {
   title: string;
   description?: string;
-  startAt: string; // ISO
-  endAt: string;   // ISO
-  imageFile?: File | null;
-
   category?: CampaignCategory;
-  goal?: string;
-  actionsRequired?: string[];
-  resources?: CampaignResource[];
   visibility?: CampaignVisibility;
+  status?: CampaignStatus;
+  coverImageFile?: File | null;
+  coverImageUrl?: string; // optional if already uploaded
+  startAt?: string;
+  endAt?: string;
 }
 
-export interface UpdateCampaignInput extends Partial<NewCampaignInput> {
-  imageUrl?: string | null; // allow clearing
+export interface UpdateCampaignInput extends Partial<NewCampaignInput> {}
+
+export interface CampaignListQuery {
+  search?: string;
+  status?: CampaignStatus | "all";
+  visibility?: CampaignVisibility | "all";
+  category?: CampaignCategory | "all";
+  pageSize?: number;
+  cursor?: any | null; // Firestore document snapshot for pagination
+  orderBy?: "createdAt" | "startAt" | "title";
+  orderDir?: "asc" | "desc";
+}
+
+export interface PagedResult<T> {
+  items: T[];
+  nextCursor: any | null;
+}
+
+export interface CampaignCounts {
+  total: number;
+  draft: number;
+  scheduled: number;
+  active: number;
+  completed: number;
+  archived: number;
 }
 
 export interface Participant {
-  id: string;
-  uid: string;
-  displayName?: string;
+  id: string;          // doc id
+  uid: string;         // user id
+  displayName: string; // user display
   email?: string;
-  joinedAt: string; // ISO
+  joinedAt: string;    // ISO
+  status?: "pending" | "approved" | "rejected";
 }
+
+// Ensure this file can be imported in isolated modules
+export type { CampaignStatus as TCampaignStatus };

@@ -1,194 +1,297 @@
-// src/components/campaigns/CampaignList.tsx
-import React, { useMemo } from "react";
-import { Campaign, computeStatus } from "../../firebase/campaignApi";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Campaign,
+  CampaignCounts,
+  CampaignListQuery,
+  NewCampaignInput,
+  UpdateCampaignInput,
+} from "../../types/campaign";
+import {
+  createCampaign,
+  deleteCampaign,
+  fetchCampaigns,
+  getCountsSafe,
+  updateCampaign,
+  setPublished,
+} from "../../firebase/campaignApi";
 
-type Props = {
-  items: Campaign[];
-  loading: boolean;
-  onEdit: (c: Campaign) => void;
-  onDelete: (c: Campaign) => void;
-  onTogglePublish: (c: Campaign, next: boolean) => void;
-  onViewParticipants?: (c: Campaign) => void;
-  view?: "grid" | "list"; // NEW
-};
+import CampaignToolbar from "./CampaignToolbar";
+import CampaignRow from "./CampaignRow";
+import CampaignForm from "./CampaignForm";
+import CampaignCountsView from "./CampaignCounts";
+import ParticipantDrawer from "./ParticipantDrawer";
+import ConfirmDialog from "../common/ConfirmDialog";
+import { usePersistedState } from "../../hooks/usePersistedState";
 
-const Badge: React.FC<{ text: string; tone?: "green" | "blue" | "gray" | "red" | "amber" }> = ({ text, tone = "gray" }) => {
-  const tones: Record<string, string> = {
-    green: "bg-green-100 text-green-800",
-    blue: "bg-blue-100 text-blue-800",
-    gray: "bg-gray-100 text-gray-700",
-    red: "bg-red-100 text-red-800",
-    amber: "bg-amber-100 text-amber-800",
+export default function CampaignList() {
+  const [items, setItems] = useState<Campaign[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [counts, setCounts] = useState<CampaignCounts | null>(null);
+
+  // Persisted filters & view
+  const [search, setSearch] = usePersistedState("c_search", "");
+  const [status, setStatus] = usePersistedState<CampaignListQuery["status"]>("c_status", "all");
+  const [visibility, setVisibility] = usePersistedState<CampaignListQuery["visibility"]>("c_visibility", "all");
+  const [category, setCategory] = usePersistedState<string | "all">("c_category", "all");
+  const [view, setView] = usePersistedState<"list" | "grid">("c_view", "list");
+
+  const [cursor, setCursor] = useState<any | null>(null);
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [formMode, setFormMode] = useState<"create" | "edit">("create");
+  const [editing, setEditing] = useState<Campaign | null>(null);
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<Campaign | null>(null);
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerCampaignId, setDrawerCampaignId] = useState<string | null>(null);
+
+  // Track publish/unpublish in-flight (per id) so UI can disable correctly
+  const [pendingPubIds, setPendingPubIds] = useState<Set<string>>(new Set());
+
+  const pageSize = 20;
+
+  const onReset = () => {
+    setSearch("");
+    setStatus("all");
+    setVisibility("all");
+    setCategory("all");
   };
-  return <span className={`px-2 py-0.5 text-xs rounded-full ${tones[tone]}`}>{text}</span>;
-};
 
-const fmt = (iso?: string) => {
-  if (!iso) return "—";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "—";
-  return new Date(t).toLocaleString();
-};
-
-const CampaignRow: React.FC<{
-  c: Campaign;
-  onEdit: () => void;
-  onDelete: () => void;
-  onTogglePublish: (next: boolean) => void;
-  onViewParticipants?: () => void;
-}> = ({ c, onEdit, onDelete, onTogglePublish, onViewParticipants }) => {
-  const status = computeStatus(c);
-  const tone = useMemo(() => (status === "active" ? "green" : status === "scheduled" ? "blue" : status === "draft" ? "amber" : "gray"), [status]);
-
-  return (
-    <div className="rounded-xl border bg-white p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <h3 className="text-base md:text-lg font-semibold truncate">{c.title}</h3>
-          <Badge text={status} tone={tone as any} />
-          <Badge text={c.category} />
-          <Badge text={c.visibility} />
-          {c.isPublished ? <Badge text="Published" tone="green" /> : <Badge text="Unpublished" tone="red" />}
-        </div>
-        {c.description && <p className="text-sm text-gray-600 mt-1 line-clamp-2">{c.description}</p>}
-        <div className="text-xs text-gray-500 mt-1">{fmt(c.startDate)} → {fmt(c.endDate)}</div>
-        <div className="text-sm text-gray-600 mt-1">Participants: <span className="font-medium">{c.participantsCount ?? 0}</span></div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2 text-sm md:justify-items-end">
-        <div className="rounded-lg border p-2">
-          <div className="text-gray-500">Reach</div>
-          <div className="font-medium">{c.reach ?? 0}</div>
-        </div>
-        <div className="rounded-lg border p-2">
-          <div className="text-gray-500">Clicks</div>
-          <div className="font-medium">{c.clicks ?? 0}</div>
-        </div>
-        <div className="rounded-lg border p-2">
-          <div className="text-gray-500">Likes</div>
-          <div className="font-medium">{c.likes ?? 0}</div>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 md:ml-4">
-        {onViewParticipants && (
-          <button onClick={onViewParticipants} className="px-3 py-1.5 rounded-lg border hover:bg-gray-50">Participants</button>
-        )}
-        <button onClick={onEdit} className="px-3 py-1.5 rounded-lg border hover:bg-gray-50">Edit</button>
-        <button onClick={() => onTogglePublish(!c.isPublished)} className="px-3 py-1.5 rounded-lg border hover:bg-gray-50">
-          {c.isPublished ? "Unpublish" : "Publish"}
-        </button>
-        <button onClick={onDelete} className="px-3 py-1.5 rounded-lg border text-red-600 hover:bg-red-50">Delete</button>
-      </div>
-    </div>
-  );
-};
-
-const CampaignCard: React.FC<{
-  c: Campaign;
-  onEdit: () => void;
-  onDelete: () => void;
-  onTogglePublish: (next: boolean) => void;
-  onViewParticipants?: () => void;
-}> = ({ c, onEdit, onDelete, onTogglePublish, onViewParticipants }) => {
-  const status = computeStatus(c);
-  const tone = useMemo(() => (status === "active" ? "green" : status === "scheduled" ? "blue" : status === "draft" ? "amber" : "gray"), [status]);
-
-  return (
-    <div className="rounded-2xl border overflow-hidden bg-white">
-      {!!c.coverUrl && (
-        <div className="h-40 bg-gray-100">
-          <img src={c.coverUrl} alt={c.title} className="h-40 w-full object-cover" />
-        </div>
-      )}
-      <div className="p-4 space-y-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-semibold">{c.title}</h3>
-            <div className="flex items-center gap-2 mt-1">
-              <Badge text={status} tone={tone as any} />
-              <Badge text={c.category} />
-              <Badge text={c.visibility} />
-              {c.isPublished ? <Badge text="Published" tone="green" /> : <Badge text="Unpublished" tone="red" />}
-            </div>
-          </div>
-        </div>
-
-        {c.description && <p className="text-sm text-gray-600 line-clamp-3">{c.description}</p>}
-
-        <div className="grid grid-cols-3 gap-2 text-sm">
-          <div className="rounded-lg border p-2"><div className="text-gray-500">Reach</div><div className="font-medium">{c.reach ?? 0}</div></div>
-          <div className="rounded-lg border p-2"><div className="text-gray-500">Clicks</div><div className="font-medium">{c.clicks ?? 0}</div></div>
-          <div className="rounded-lg border p-2"><div className="text-gray-500">Likes</div><div className="font-medium">{c.likes ?? 0}</div></div>
-        </div>
-
-        <div className="text-xs text-gray-500">{fmt(c.startDate)} → {fmt(c.endDate)}</div>
-
-        <div className="flex items-center justify-between pt-1">
-          <div className="text-sm text-gray-600">Participants: <span className="font-medium">{c.participantsCount ?? 0}</span></div>
-          <div className="flex items-center gap-2">
-            {onViewParticipants && <button onClick={onViewParticipants} className="px-3 py-1.5 rounded-lg border hover:bg-gray-50">Participants</button>}
-            <button onClick={onEdit} className="px-3 py-1.5 rounded-lg border hover:bg-gray-50">Edit</button>
-            <button onClick={() => onTogglePublish(!c.isPublished)} className="px-3 py-1.5 rounded-lg border hover:bg-gray-50">{c.isPublished ? "Unpublish" : "Publish"}</button>
-            <button onClick={onDelete} className="px-3 py-1.5 rounded-lg border text-red-600 hover:bg-red-50">Delete</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const CampaignList: React.FC<Props> = ({ items, loading, onEdit, onDelete, onTogglePublish, onViewParticipants, view = "list" }) => {
-  if (loading && !items.length) {
-    return (
-      <div className={view === "grid" ? "grid grid-cols-1 md:grid-cols-3 gap-4" : "space-y-3"}>
-        {Array.from({ length: 6 }).map((_, i) =>
-          view === "grid" ? (
-            <div key={i} className="rounded-2xl border p-4 animate-pulse h-64 bg-gray-50" />
-          ) : (
-            <div key={i} className="rounded-xl border p-10 animate-pulse bg-gray-50" />
-          )
-        )}
-      </div>
-    );
+  async function load(reset = true) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchCampaigns({
+        search,
+        status,
+        visibility,
+        category,
+        pageSize,
+        cursor: reset ? null : cursor,
+        orderBy: "createdAt",
+        orderDir: "desc",
+      });
+      setItems((prev) => (reset ? res.items : [...prev, ...res.items]));
+      setCursor(res.nextCursor);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load campaigns");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  if (!items.length) {
-    return <div className="rounded-xl border p-6 text-center text-gray-600">No campaigns found.</div>;
+  async function loadCounts() {
+    try {
+      const c = await getCountsSafe();
+      setCounts(c);
+    } catch (e) {
+      console.warn("[Campaigns] loadCounts failed", e);
+      setCounts(null);
+    }
   }
 
-  if (view === "grid") {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+  useEffect(() => {
+    load(true);
+    loadCounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => load(true), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, status, visibility, category]);
+
+  const onCreateClick = () => {
+    setFormMode("create");
+    setEditing(null);
+    setFormOpen(true);
+  };
+
+  const onEdit = (c: Campaign) => {
+    setFormMode("edit");
+    setEditing(c);
+    setFormOpen(true);
+  };
+
+  const onDeleteClick = (c: Campaign) => {
+    setPendingDelete(c);
+    setConfirmOpen(true);
+  };
+
+  const onConfirmDelete = async () => {
+    if (!pendingDelete) return;
+    try {
+      await deleteCampaign(pendingDelete.id);
+      await Promise.all([load(true), loadCounts()]);
+    } finally {
+      setConfirmOpen(false);
+      setPendingDelete(null);
+    }
+  };
+
+  const onSubmit = async (data: NewCampaignInput | UpdateCampaignInput) => {
+    if (formMode === "create") {
+      await createCampaign(data as NewCampaignInput, "admin"); // replace with real auth uid
+    } else if (formMode === "edit" && editing) {
+      await updateCampaign(editing.id, data as UpdateCampaignInput);
+    }
+    setFormOpen(false);
+    await Promise.all([load(true), loadCounts()]);
+  };
+
+  // Publish/Unpublish handler with optimistic UI + in-flight guard
+  const onPublish = async (c: Campaign) => {
+    const wantPublish = c.status !== "active"; // draft/scheduled -> publish; active -> unpublish
+
+    if (pendingPubIds.has(c.id)) return;
+    setPendingPubIds((s) => new Set(s).add(c.id));
+
+    // optimistic update
+    const prevItems = items;
+    const nextStatus = wantPublish ? "active" : "draft";
+    setItems((arr) => arr.map((it) => (it.id === c.id ? { ...it, status: nextStatus } : it)));
+
+    try {
+      await setPublished(c.id, wantPublish);
+      // refresh counts in background (no UI block)
+      loadCounts();
+    } catch (e) {
+      console.warn("setPublished failed", e);
+      // revert optimistic change
+      setItems(prevItems);
+    } finally {
+      setPendingPubIds((s) => {
+        const n = new Set(s);
+        n.delete(c.id);
+        return n;
+      });
+    }
+  };
+
+  const openParticipants = (c: Campaign) => {
+    setDrawerCampaignId(c.id);
+    setDrawerOpen(true);
+  };
+
+  // quick helper to know if a row is pending publish/unpublish
+  const isPending = (id: string) => pendingPubIds.has(id);
+
+  return (
+    <div className="space-y-4">
+      <CampaignCountsView counts={counts} />
+
+      <CampaignToolbar
+        search={search}
+        onSearch={setSearch}
+        status={status}
+        onStatus={setStatus}
+        visibility={visibility}
+        onVisibility={setVisibility}
+        category={category}
+        onCategory={setCategory}
+        onCreate={onCreateClick}
+        view={view}
+        onView={setView}
+        onReset={onReset}
+      />
+
+      {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+
+      <div className={view === "grid" ? "grid grid-cols-1 gap-2 md:grid-cols-2" : "space-y-2"}>
         {items.map((c) => (
-          <CampaignCard
-            key={c.id}
-            c={c}
-            onEdit={() => onEdit(c)}
-            onDelete={() => onDelete(c)}
-            onTogglePublish={(n) => onTogglePublish(c, n)}
-            onViewParticipants={onViewParticipants ? () => onViewParticipants(c) : undefined}
-          />
+          <div key={c.id} className={view === "grid" ? "rounded-xl border p-3" : ""}>
+            {view === "grid" ? (
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium">{c.title}</div>
+                  <div className="text-xs text-gray-500">{c.category || "general"}</div>
+                  <div className="mt-1 text-[11px] text-gray-500">
+                    <span className="mr-2 rounded-full bg-gray-100 px-2 py-0.5 capitalize">{c.status}</span>
+                    <span className="rounded-full bg-gray-100 px-2 py-0.5 capitalize">{c.visibility}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => onPublish(c)}
+                    disabled={c.status === "completed" || c.status === "archived" || isPending(c.id)}
+                    className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-100 disabled:opacity-50"
+                    title={
+                      c.status === "completed" || c.status === "archived"
+                        ? "Completed/archived campaigns cannot be published"
+                        : c.status === "active"
+                        ? "Unpublish"
+                        : "Publish"
+                    }
+                  >
+                    {isPending(c.id) ? "..." : c.status === "active" ? "Unpublish" : "Publish"}
+                  </button>
+                  <button onClick={() => onEdit(c)} className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-100">
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => onDeleteClick(c)}
+                    className="rounded-lg border px-3 py-1 text-sm text-red-600 hover:bg-red-50"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    onClick={() => openParticipants(c)}
+                    className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-100"
+                  >
+                    Participants
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center">
+                <div className="flex-1">
+                  <CampaignRow item={c} onEdit={onEdit} onDelete={onDeleteClick} onPublish={onPublish} />
+                </div>
+                <div className="ml-2 hidden md:block">
+                  <button
+                    onClick={() => openParticipants(c)}
+                    className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-100"
+                  >
+                    Participants
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         ))}
       </div>
-    );
-  }
 
-  // list view
-  return (
-    <div className="space-y-3">
-      {items.map((c) => (
-        <CampaignRow
-          key={c.id}
-          c={c}
-          onEdit={() => onEdit(c)}
-          onDelete={() => onDelete(c)}
-          onTogglePublish={(n) => onTogglePublish(c, n)}
-          onViewParticipants={onViewParticipants ? () => onViewParticipants(c) : undefined}
-        />
-      ))}
+      <div className="flex items-center justify-center">
+        <button
+          disabled={!cursor || loading}
+          onClick={() => load(false)}
+          className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+        >
+          {cursor ? (loading ? "Loading..." : "Load More") : "No more results"}
+        </button>
+      </div>
+
+      <CampaignForm
+        open={formOpen}
+        mode={formMode}
+        initial={editing}
+        onCancel={() => setFormOpen(false)}
+        onSubmit={onSubmit}
+      />
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Delete Campaign"
+        message={`Are you sure you want to delete "${pendingDelete?.title}"? This cannot be undone.`}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={onConfirmDelete}
+      />
+
+      <ParticipantDrawer open={drawerOpen} campaignId={drawerCampaignId} onClose={() => setDrawerOpen(false)} />
     </div>
   );
-};
-
-export default CampaignList;
+}

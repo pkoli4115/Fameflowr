@@ -1,39 +1,21 @@
-// src/components/campaigns/CampaignStats.tsx
+// FILE: src/components/campaigns/CampaignStats.tsx
+// =============================
 import React from "react";
+import { fmtNumber } from "../../utils/format";
 
-type Props = {
-  stats: {
-    total: number;
-    active: number;
-    scheduled: number;
-    ended: number;
-    draft: number;
-    reach: number;
-    clicks: number;
-    likes: number;
-  };
-};
-
-const StatCard: React.FC<{ label: string; value: number | string }> = ({ label, value }) => (
-  <div className="rounded-xl border p-4">
-    <div className="text-sm text-gray-500">{label}</div>
-    <div className="text-2xl font-semibold">{value}</div>
-  </div>
-);
-
-const CampaignStats: React.FC<Props> = ({ stats }) => {
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <StatCard label="Total" value={stats.total} />
-      <StatCard label="Active" value={stats.active} />
-      <StatCard label="Scheduled" value={stats.scheduled} />
-      <StatCard label="Ended" value={stats.ended} />
-      <StatCard label="Drafts" value={stats.draft} />
-      <StatCard label="Reach" value={stats.reach} />
-      <StatCard label="Clicks" value={stats.clicks} />
-      <StatCard label="Likes" value={stats.likes} />
+export default function CampaignStats({ total, reach, clicks, likes }: { total?: number; reach?: number; clicks?: number; likes?: number; }) {
+  const Card = ({ label, value }: { label: string; value: number | string }) => (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-2xl font-semibold">{fmtNumber(typeof value === "number" ? value : undefined)}</div>
     </div>
   );
-};
-
-export default CampaignStats;
+  return (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <Card label="Campaigns" value={total ?? "—"} />
+      <Card label="Reach" value={reach ?? "—"} />
+      <Card label="Clicks" value={clicks ?? "—"} />
+      <Card label="Likes" value={likes ?? "—"} />
+    </div>
+  );
+}

@@ -13,12 +13,11 @@
     "strict": true,
     "skipLibCheck": true,
 
-    // ✅ Add these:
-    "types": ["node"],
-    "baseUrl": ".", 
+    "types": ["vite/client", "node"],
+    "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
     }
   },
-  "include": ["src", "admin"]
+  "include": ["src", "admin", "env.d.ts"]
 }

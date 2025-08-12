@@ -1,279 +1,335 @@
-// src/firebase/campaignApi.ts
 import {
   addDoc,
   collection,
   deleteDoc,
   doc,
-  getDoc,
   getDocs,
-  limit as fbLimit,
-  orderBy,
-  query,
-  serverTimestamp,
-  startAfter,
+  getDoc,
+  limit as qLimit,
+  orderBy as qOrderBy,
+  query as q,
+  startAfter as qStartAfter,
   updateDoc,
   where,
-  DocumentData,
-  QueryDocumentSnapshot,
-  getCountFromServer,
-  Timestamp,
+  serverTimestamp,
 } from "firebase/firestore";
-import { db } from "./firebaseConfig";
+import { getCountFromServer } from "firebase/firestore";
+import { db, app } from "../firebase/firebaseConfig";
+import { uploadWithProgress } from "../utils/upload";
+import { computeStatus, isoNow } from "../utils/date";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
-/** ===== Types ===== */
-export type CampaignVisibility = "public" | "private";
-export type CampaignStatus = "draft" | "scheduled" | "active" | "ended";
-export type CampaignCategory =
-  | "Brand"
-  | "UGC"
-  | "Contest"
-  | "Influencer"
-  | "Awareness"
-  | "Other";
-
-export interface Campaign {
-  id: string;
-  title: string;
-  description?: string;
-  coverUrl?: string;
-  category: CampaignCategory;
-  visibility: CampaignVisibility;
-  startDate: string; // ISO
-  endDate: string; // ISO
-  budget?: number;
-  isPublished: boolean;
-  createdAt?: string; // ISO
-  updatedAt?: string; // ISO
-  participantsCount?: number;
-  clicks?: number;
-  likes?: number;
-  reach?: number;
-}
-
-export type NewCampaignInput = Omit<
+// —— Types (type-only to satisfy isolatedModules)
+import type {
   Campaign,
-  "id" | "createdAt" | "updatedAt" | "participantsCount"
->;
-export type UpdateCampaignInput = Partial<
-  Omit<Campaign, "id" | "createdAt" | "updatedAt">
->;
+  CampaignCounts,
+  CampaignListQuery,
+  NewCampaignInput,
+  PagedResult,
+  Participant,
+  UpdateCampaignInput,
+  CampaignVisibility,
+  CampaignStatus,
+  CampaignCategory,
+} from "../types/campaign";
 
-export interface Participant {
-  id: string;
-  uid: string;
-  displayName?: string;
-  joinedAt?: string; // ISO
+// —— Re-exports so legacy imports from this module continue to work
+export type {
+  Campaign,
+  CampaignCounts,
+  CampaignListQuery,
+  NewCampaignInput,
+  PagedResult,
+  Participant,
+  UpdateCampaignInput,
+  CampaignVisibility,
+  CampaignStatus,
+  CampaignCategory,
+} from "../types/campaign";
+export { computeStatus } from "../utils/date";
+
+const COLL = "campaigns";
+
+// ---------- helpers ----------
+function normalizeToIso(v: any): string | undefined {
+  if (!v && v !== 0) return undefined;
+  if (v && typeof v === "object" && typeof v.toDate === "function") {
+    const d = v.toDate();
+    return isNaN(d.getTime()) ? undefined : d.toISOString();
+  }
+  if (v instanceof Date) return isNaN(v.getTime()) ? undefined : v.toISOString();
+  if (typeof v === "number") {
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? undefined : d.toISOString();
+  }
+  if (typeof v === "string") {
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? undefined : d.toISOString();
+  }
+  return undefined;
 }
 
-/** ===== Helpers ===== */
-const COLL = "campaigns";
-const toIso = (d: Date | number) => new Date(d).toISOString();
+// -------------------------------------
+// Mapping (normalizes Timestamp → ISO)
+// -------------------------------------
+function mapDoc(d: any): Campaign {
+  const data = d.data();
+  const startIso = normalizeToIso(data.startAt);
+  const endIso = normalizeToIso(data.endAt);
+  const createdIso = normalizeToIso(data.createdAt) ?? isoNow();
+  const updatedIso = normalizeToIso(data.updatedAt) ?? isoNow();
 
-/** Accept Timestamp | string | undefined and return ISO string or "" */
-const toIsoFromAny = (v: any): string => {
-  if (!v) return "";
-  if (typeof v === "string") return v;
-  if (v?.toDate) return toIso(v.toDate());
-  return "";
-};
-
-const fromDoc = (snap: QueryDocumentSnapshot<DocumentData>): Campaign => {
-  const data = snap.data();
   return {
-    id: snap.id,
-    title: data.title ?? "",
-    description: data.description ?? "",
-    coverUrl: data.coverUrl ?? "",
-    category: (data.category ?? "Other") as CampaignCategory,
+    id: d.id,
+    title: data.title,
+    description: data.description,
+    category: data.category,
     visibility: (data.visibility ?? "public") as CampaignVisibility,
-    // accept Timestamp | string | undefined; also tolerate legacy start/end field names
-    startDate: toIsoFromAny(data.startDate ?? data.start ?? null),
-    endDate: toIsoFromAny(data.endDate ?? data.end ?? null),
-    budget: typeof data.budget === "number" ? data.budget : undefined,
-    isPublished: !!data.isPublished,
-    createdAt: toIsoFromAny(data.createdAt),
-    updatedAt: toIsoFromAny(data.updatedAt),
-    participantsCount: data.participantsCount ?? 0,
-    clicks: data.clicks ?? 0,
-    likes: data.likes ?? 0,
-    reach: data.reach ?? 0,
+    status: (data.status ?? computeStatus(startIso, endIso)) as CampaignStatus,
+    coverImageUrl: data.coverImageUrl,
+    startAt: startIso,
+    endAt: endIso,
+    createdAt: createdIso,
+    updatedAt: updatedIso,
+    createdByUid: data.createdByUid ?? "",
+  } as Campaign;
+}
+
+// -------------------------------------
+// Core API
+// -------------------------------------
+export async function fetchCampaigns(params: CampaignListQuery): Promise<PagedResult<Campaign>> {
+  const {
+    search = "",
+    status = "all",
+    visibility = "all",
+    category = "all",
+    pageSize = 20,
+    cursor = null,
+    orderBy = "createdAt",
+    orderDir = "desc",
+  } = params;
+
+  const colRef = collection(db, COLL);
+  const clauses: any[] = [];
+
+  if (status !== "all") clauses.push(where("status", "==", status));
+  if (visibility !== "all") clauses.push(where("visibility", "==", visibility));
+  if (category !== "all") clauses.push(where("category", "==", category));
+
+  let qref = q(colRef, ...clauses, qOrderBy(orderBy, orderDir), qLimit(pageSize));
+  if (cursor)
+    qref = q(colRef, ...clauses, qOrderBy(orderBy, orderDir), qStartAfter(cursor), qLimit(pageSize));
+
+  const snap = await getDocs(qref);
+  let items = snap.docs.map(mapDoc);
+
+  if (search.trim()) {
+    const s = search.trim().toLowerCase();
+    items = items.filter(
+      (c) => c.title?.toLowerCase().includes(s) || c.description?.toLowerCase().includes(s)
+    );
+  }
+
+  const nextCursor = snap.docs.length ? snap.docs[snap.docs.length - 1] : null;
+  return { items, nextCursor };
+}
+
+export async function fetchCampaignById(id: string): Promise<Campaign | null> {
+  const ref = doc(db, COLL, id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  return mapDoc(snap);
+}
+
+export async function getCounts(): Promise<CampaignCounts> {
+  const colRef = collection(db, COLL);
+  const total = (await getCountFromServer(q(colRef))).data().count;
+  const statuses: CampaignStatus[] = ["draft", "scheduled", "active", "completed", "archived"];
+
+  const results = await Promise.all(
+    statuses.map(async (st) => (await getCountFromServer(q(colRef, where("status", "==", st)))).data().count)
+  );
+
+  return {
+    total,
+    draft: results[0] || 0,
+    scheduled: results[1] || 0,
+    active: results[2] || 0,
+    completed: results[3] || 0,
+    archived: results[4] || 0,
   };
-};
+}
 
-/** ===== Filters & paging ===== */
-export type CampaignFilters = {
-  search?: string;
-  status?: CampaignStatus | "all";
-  category?: CampaignCategory | "all";
-  visibility?: CampaignVisibility | "all";
-};
+/** Scan-and-count fallback (avoids count() permission/index issues). */
+export async function getCountsSafe(): Promise<CampaignCounts> {
+  const snap = await getDocs(collection(db, COLL));
+  let total = 0,
+    draft = 0,
+    scheduled = 0,
+    active = 0,
+    completed = 0,
+    archived = 0;
 
-export type ListPage = {
-  items: Campaign[];
-  nextCursor: QueryDocumentSnapshot<DocumentData> | null;
-};
+  snap.forEach((docSnap) => {
+    total += 1;
+    const st = (docSnap.data()?.status ?? "draft") as CampaignStatus;
+    if (st === "draft") draft += 1;
+    else if (st === "scheduled") scheduled += 1;
+    else if (st === "active") active += 1;
+    else if (st === "completed") completed += 1;
+    else if (st === "archived") archived += 1;
+  });
 
-/** Compute status safely (handles missing/invalid dates) */
-export const computeStatus = (c: Campaign): CampaignStatus => {
-  const startMs = Date.parse(c.startDate || "");
-  const endMs = Date.parse(c.endDate || "");
-  if (!c.isPublished) return "draft";
-  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "draft";
-  const now = Date.now();
-  if (now < startMs) return "scheduled";
-  if (now > endMs) return "ended";
-  return "active";
-};
-
-/** ===== CRUD & Queries ===== */
+  return { total, draft, scheduled, active, completed, archived };
+}
 
 export async function createCampaign(
-  input: NewCampaignInput
+  input: NewCampaignInput,
+  currentUid?: string,
+  onUploadProgress?: (p: number) => void
 ): Promise<string> {
-  const ref = await addDoc(collection(db, COLL), {
-    ...input,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+  const uid = currentUid ?? "admin";
+  const colRef = collection(db, COLL);
+  let coverImageUrl = input.coverImageUrl;
+
+  if (!coverImageUrl && input.coverImageFile) {
+    const path = `${COLL}/${Date.now()}_${input.coverImageFile.name}`;
+    coverImageUrl = await uploadWithProgress(path, input.coverImageFile, onUploadProgress);
+  }
+
+  const nowIso = isoNow();
+  const computed = computeStatus(input.startAt, input.endAt);
+  const docRef = await addDoc(colRef, {
+    title: input.title,
+    description: input.description ?? "",
+    category: input.category ?? "general",
+    visibility: input.visibility ?? "public",
+    status: input.status ?? computed,
+    coverImageUrl: coverImageUrl ?? "",
+    startAt: input.startAt ?? null,
+    endAt: input.endAt ?? null,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    createdByUid: uid,
+    createdAtTs: serverTimestamp(),
   });
-  return ref.id;
+  return docRef.id;
 }
 
 export async function updateCampaign(
   id: string,
-  input: UpdateCampaignInput
+  input: UpdateCampaignInput,
+  onUploadProgress?: (p: number) => void
 ): Promise<void> {
-  await updateDoc(doc(db, COLL, id), {
-    ...input,
-    updatedAt: serverTimestamp(),
-  });
+  const ref = doc(db, COLL, id);
+  const data: any = { updatedAt: isoNow() };
+
+  if (typeof input.title === "string") data.title = input.title;
+  if (typeof input.description === "string") data.description = input.description;
+  if (typeof input.category === "string") data.category = input.category;
+  if (typeof input.visibility === "string") data.visibility = input.visibility;
+  if (typeof input.status === "string") data.status = input.status;
+  if (typeof input.startAt !== "undefined") data.startAt = input.startAt ?? null;
+  if (typeof input.endAt !== "undefined") data.endAt = input.endAt ?? null;
+
+  if (!input.coverImageUrl && input.coverImageFile) {
+    const path = `${COLL}/${Date.now()}_${input.coverImageFile.name}`;
+    data.coverImageUrl = await uploadWithProgress(path, input.coverImageFile, onUploadProgress);
+  } else if (typeof input.coverImageUrl === "string") {
+    data.coverImageUrl = input.coverImageUrl;
+  }
+
+  if (!input.status && ("startAt" in data || "endAt" in data)) {
+    data.status = computeStatus(normalizeToIso(data.startAt), normalizeToIso(data.endAt));
+  }
+
+  await updateDoc(ref, data);
 }
 
 export async function deleteCampaign(id: string): Promise<void> {
-  await deleteDoc(doc(db, COLL, id));
+  const ref = doc(db, COLL, id);
+  await deleteDoc(ref);
 }
 
-export async function getCampaign(id: string): Promise<Campaign | null> {
-  const s = await getDoc(doc(db, COLL, id));
-  if (!s.exists()) return null;
-  // @ts-expect-error reuse mapping for convenience
-  return fromDoc({ id: s.id, ...s } as QueryDocumentSnapshot<DocumentData>);
-}
-
-/** Page list (server filters + cursor); search & status filtered client side */
-export async function listCampaignsPage(
-  filters: CampaignFilters,
-  pageSize = 12,
-  cursor?: QueryDocumentSnapshot<DocumentData> | null
-): Promise<ListPage> {
-  const constraints: any[] = [orderBy("createdAt", "desc"), fbLimit(pageSize)];
-  if (filters.category && filters.category !== "all") {
-    constraints.push(where("category", "==", filters.category));
-  }
-  if (filters.visibility && filters.visibility !== "all") {
-    constraints.push(where("visibility", "==", filters.visibility));
-  }
-  if (cursor) constraints.push(startAfter(cursor));
-
-  const q = query(collection(db, COLL), ...constraints);
-  const snaps = await getDocs(q);
-  let items = snaps.docs.map(fromDoc);
-
-  if (filters.status && filters.status !== "all") {
-    items = items.filter((c) => computeStatus(c) === filters.status);
-  }
-
-  if (filters.search && filters.search.trim()) {
-    const s = filters.search.trim().toLowerCase();
-    items = items.filter(
-      (c) =>
-        c.title.toLowerCase().includes(s) ||
-        (c.description ?? "").toLowerCase().includes(s)
-    );
-  }
-
-  const nextCursor =
-    snaps.docs.length === pageSize ? snaps.docs[snaps.docs.length - 1] : null;
-
-  return { items, nextCursor };
-}
-
-/** Publish / Unpublish */
-export async function setPublished(
-  id: string,
-  publish: boolean
-): Promise<void> {
-  await updateDoc(doc(db, COLL, id), {
-    isPublished: publish,
-    updatedAt: serverTimestamp(),
-  });
-}
-
-/** Participants (subcollection: campaigns/{id}/participants) */
-export async function listParticipants(
-  campaignId: string
-): Promise<Participant[]> {
-  const ref = collection(db, COLL, campaignId, "participants");
-  const snaps = await getDocs(ref);
-  return snaps.docs.map((d) => {
-    const data = d.data();
+// Participants
+export async function listParticipants(campaignId: string): Promise<Participant[]> {
+  const colRef = collection(db, `${COLL}/${campaignId}/participants`);
+  const snap = await getDocs(colRef);
+  return snap.docs.map((docSnap) => {
+    const data = docSnap.data() as any;
     return {
-      id: d.id,
+      id: docSnap.id,
       uid: data.uid,
-      displayName: data.displayName,
-      joinedAt: toIsoFromAny(data.joinedAt),
-    } as Participant;
+      displayName: data.displayName || "",
+      email: data.email || "",
+      joinedAt: normalizeToIso(data.joinedAt) ?? "",
+      status: (data.status || "pending") as Participant["status"],
+    };
   });
 }
 
-/** ===== Aggregated counts (avoid inequality-on-different-fields) ===== */
-export type CampaignServerCounts = {
-  total: number;
-  draft: number;
-  scheduled: number;
-  active: number;
-  ended: number;
-};
+// Aggregated metrics (/stats/campaigns)
+export async function getAggregatedMetrics(): Promise<{
+  total?: number;
+  reach?: number;
+  clicks?: number;
+  likes?: number;
+}> {
+  const ref = doc(db, "stats", "campaigns");
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return {};
+  const d: any = snap.data();
+  return {
+    total: Number(d.total || 0),
+    reach: Number(d.reach || 0),
+    clicks: Number(d.clicks || 0),
+    likes: Number(d.likes || 0),
+  };
+}
 
-/**
- * Firestore restriction: a single query can only have inequalities on ONE field.
- * To compute scheduled/active/ended, we fetch published docs and apply the date
- * logic in JS so we don't combine inequalities on startDate and endDate.
- */
-export async function getCampaignServerCounts(): Promise<CampaignServerCounts> {
-  const coll = collection(db, COLL);
+// -------------------------------------
+// Publish / Unpublish with safe callable fallback
+// -------------------------------------
+export async function setPublished(id: string, publish: boolean): Promise<void> {
+  // Read from env (Vite). Defaults: callable disabled, region us-central1.
+  const USE_FN =
+    (import.meta as any)?.env?.VITE_USE_FN_TOGGLE_PUBLISH === "true";
+  const REGION =
+    (import.meta as any)?.env?.VITE_FIREBASE_FUNCTIONS_REGION || "us-central1";
 
-  const safeCount = async (q: any) => {
+  // If callable path is explicitly enabled, try it first
+  if (USE_FN) {
     try {
-      const snap = await getCountFromServer(q);
-      return snap.data().count;
+      const fns = getFunctions(app, REGION);
+      const toggle = httpsCallable(fns, "togglePublish");
+      await toggle({ campaignId: id, publish });
+      return; // success via callable
     } catch {
-      return 0; // if index missing or rules block, avoid crashing UI
+      // Silently fall through to Firestore (avoid breaking UX)
     }
+  }
+
+  // Firestore fallback (direct write)
+  const ref = doc(db, COLL, id);
+  const updates: any = {
+    status: publish ? "active" : "draft",
+    updatedAt: serverTimestamp(),
   };
 
-  // total (all docs)
-  const total = await safeCount(coll as any);
-
-  // drafts (published=false)
-  const draft = await safeCount(query(coll, where("isPublished", "==", false)));
-
-  // For scheduled/active/ended — get published docs and filter in JS
-  let publishedDocs: Campaign[] = [];
-  try {
-    const s = await getDocs(query(coll, where("isPublished", "==", true)));
-    publishedDocs = s.docs.map(fromDoc);
-  } catch {
-    publishedDocs = [];
+  if (publish) {
+    // Ensure startAt exists on first publish
+    const snap = await getDoc(ref);
+    const hasStart = snap.exists() && !!(snap.data() as any)?.startAt;
+    if (!hasStart) updates.startAt = serverTimestamp();
   }
 
-  const now = Date.now();
-  const parse = (iso: string) => Date.parse(iso || "");
+  await updateDoc(ref, updates);
+}
 
-  const scheduled = publishedDocs.filter((c) => parse(c.startDate) > now).length;
-  const active = publishedDocs.filter(
-    (c) => parse(c.startDate) <= now && parse(c.endDate) >= now
-  ).length;
-  const ended = publishedDocs.filter((c) => parse(c.endDate) < now).length;
-
-  return { total, draft, scheduled, active, ended };
+export async function publishCampaign(id: string): Promise<void> {
+  return setPublished(id, true);
+}
+export async function unpublishCampaign(id: string): Promise<void> {
+  return setPublished(id, false);
 }
