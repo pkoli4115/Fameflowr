@@ -23,7 +23,12 @@ import ParticipantDrawer from "./ParticipantDrawer";
 import ConfirmDialog from "../common/ConfirmDialog";
 import { usePersistedState } from "../../hooks/usePersistedState";
 
-export default function CampaignList() {
+type Props = {
+  /** Optional: parent can refresh CampaignStats/CampaignCounts by listening to this */
+  onChanged?: () => void;
+};
+
+export default function CampaignList({ onChanged }: Props) {
   const [items, setItems] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +132,7 @@ export default function CampaignList() {
     try {
       await deleteCampaign(pendingDelete.id);
       await Promise.all([load(true), loadCounts()]);
+      onChanged?.(); // notify parent to refresh metrics/chips
     } finally {
       setConfirmOpen(false);
       setPendingDelete(null);
@@ -141,6 +147,7 @@ export default function CampaignList() {
     }
     setFormOpen(false);
     await Promise.all([load(true), loadCounts()]);
+    onChanged?.(); // notify parent
   };
 
   // Publish/Unpublish handler with optimistic UI + in-flight guard
@@ -159,6 +166,7 @@ export default function CampaignList() {
       await setPublished(c.id, wantPublish);
       // refresh counts in background (no UI block)
       loadCounts();
+      onChanged?.(); // publishing might affect stats elsewhere
     } catch (e) {
       console.warn("setPublished failed", e);
       // revert optimistic change

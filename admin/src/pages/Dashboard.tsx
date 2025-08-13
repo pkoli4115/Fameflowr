@@ -28,3 +28,6 @@ const Dashboard: React.FC = () => {
 };
 
 export default Dashboard;
+console.log("VITE_FIREBASE_FUNCTIONS_REGION:", import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION);
+console.log("VITE_USE_FN_RECURSIVE_DELETE:", import.meta.env.VITE_USE_FN_RECURSIVE_DELETE);
+console.log("VITE_USE_FN_TOGGLE_PUBLISH:", import.meta.env.VITE_USE_FN_TOGGLE_PUBLISH);

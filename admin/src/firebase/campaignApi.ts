@@ -5,6 +5,7 @@ import {
   doc,
   getDocs,
   getDoc,
+  getDocFromServer,
   limit as qLimit,
   orderBy as qOrderBy,
   query as q,
@@ -18,8 +19,9 @@ import { db, app } from "../firebase/firebaseConfig";
 import { uploadWithProgress } from "../utils/upload";
 import { computeStatus, isoNow } from "../utils/date";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { getStorage, ref as sref, deleteObject } from "firebase/storage";
 
-// —— Types (type-only to satisfy isolatedModules)
+// —— Types
 import type {
   Campaign,
   CampaignCounts,
@@ -33,7 +35,7 @@ import type {
   CampaignCategory,
 } from "../types/campaign";
 
-// —— Re-exports so legacy imports from this module continue to work
+// —— Re-exports
 export type {
   Campaign,
   CampaignCounts,
@@ -69,9 +71,6 @@ function normalizeToIso(v: any): string | undefined {
   return undefined;
 }
 
-// -------------------------------------
-// Mapping (normalizes Timestamp → ISO)
-// -------------------------------------
 function mapDoc(d: any): Campaign {
   const data = d.data();
   const startIso = normalizeToIso(data.startAt);
@@ -106,7 +105,7 @@ export async function fetchCampaigns(params: CampaignListQuery): Promise<PagedRe
     category = "all",
     pageSize = 20,
     cursor = null,
-    orderBy = "createdAt",
+    orderBy = "createdAt",  // caller can pass "createdAtTs"; we auto-fallback below
     orderDir = "desc",
   } = params;
 
@@ -117,11 +116,38 @@ export async function fetchCampaigns(params: CampaignListQuery): Promise<PagedRe
   if (visibility !== "all") clauses.push(where("visibility", "==", visibility));
   if (category !== "all") clauses.push(where("category", "==", category));
 
-  let qref = q(colRef, ...clauses, qOrderBy(orderBy, orderDir), qLimit(pageSize));
-  if (cursor)
-    qref = q(colRef, ...clauses, qOrderBy(orderBy, orderDir), qStartAfter(cursor), qLimit(pageSize));
+  // Try the requested order field first, then fall back to common fields
+  const orderCandidates = Array.from(
+    new Set([orderBy, "lastUpdated", "updatedAt", "createdAtTs", "createdAt", "__name__"])
+  );
 
-  const snap = await getDocs(qref);
+  let snap: any = null;
+  for (const field of orderCandidates) {
+    try {
+      let qref = q(colRef, ...clauses, qOrderBy(field as any, orderDir as any), qLimit(pageSize));
+      if (cursor) qref = q(colRef, ...clauses, qOrderBy(field as any, orderDir as any), qStartAfter(cursor), qLimit(pageSize));
+
+      snap = await getDocs(qref);
+
+      // If we got some docs, or we tried an explicit fallback field, accept it
+      if (snap.docs.length > 0 || field !== orderBy) break;
+
+      // If first attempt returned 0 and there are no filters, try next fallback
+      if (!cursor && clauses.length === 0) continue;
+      break;
+    } catch {
+      // Index errors / bad field types: try next candidate
+      continue;
+    }
+  }
+
+  if (!snap) {
+    // Extreme fallback: read collection and slice locally (safe for small sets)
+    const all = await getDocs(colRef);
+    const items = all.docs.slice(0, pageSize).map(mapDoc);
+    return { items, nextCursor: null };
+  }
+
   let items = snap.docs.map(mapDoc);
 
   if (search.trim()) {
@@ -161,7 +187,6 @@ export async function getCounts(): Promise<CampaignCounts> {
   };
 }
 
-/** Scan-and-count fallback (avoids count() permission/index issues). */
 export async function getCountsSafe(): Promise<CampaignCounts> {
   const snap = await getDocs(collection(db, COLL));
   let total = 0,
@@ -192,10 +217,12 @@ export async function createCampaign(
   const uid = currentUid ?? "admin";
   const colRef = collection(db, COLL);
   let coverImageUrl = input.coverImageUrl;
+  let coverImagePath = (input as any).coverImagePath as string | undefined;
 
   if (!coverImageUrl && input.coverImageFile) {
     const path = `${COLL}/${Date.now()}_${input.coverImageFile.name}`;
     coverImageUrl = await uploadWithProgress(path, input.coverImageFile, onUploadProgress);
+    coverImagePath = path;
   }
 
   const nowIso = isoNow();
@@ -207,6 +234,7 @@ export async function createCampaign(
     visibility: input.visibility ?? "public",
     status: input.status ?? computed,
     coverImageUrl: coverImageUrl ?? "",
+    coverImagePath: coverImagePath ?? "",
     startAt: input.startAt ?? null,
     endAt: input.endAt ?? null,
     createdAt: nowIso,
@@ -236,6 +264,7 @@ export async function updateCampaign(
   if (!input.coverImageUrl && input.coverImageFile) {
     const path = `${COLL}/${Date.now()}_${input.coverImageFile.name}`;
     data.coverImageUrl = await uploadWithProgress(path, input.coverImageFile, onUploadProgress);
+    data.coverImagePath = path;
   } else if (typeof input.coverImageUrl === "string") {
     data.coverImageUrl = input.coverImageUrl;
   }
@@ -247,9 +276,58 @@ export async function updateCampaign(
   await updateDoc(ref, data);
 }
 
+// ---- Deep delete helpers ----
+async function deleteSubcollection(collPath: string) {
+  const snap = await getDocs(collection(db, collPath));
+  if (snap.empty) return;
+  await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+}
+
+/**
+ * Deletes a campaign completely:
+ * 1) Tries callable Admin recursive delete (hard delete)
+ * 2) Falls back to client deep delete (known subcollections + doc)
+ */
 export async function deleteCampaign(id: string): Promise<void> {
-  const ref = doc(db, COLL, id);
-  await deleteDoc(ref);
+  const USE_FN =
+    (import.meta as any)?.env?.VITE_USE_FN_RECURSIVE_DELETE === "true";
+  const REGION =
+    (import.meta as any)?.env?.VITE_FIREBASE_FUNCTIONS_REGION || "us-central1";
+
+  if (USE_FN) {
+    try {
+      const fns = getFunctions(app, REGION);
+      const hardDelete = httpsCallable(fns, "hardDeleteCampaignFn");
+      await hardDelete({ campaignId: id });
+      return;
+    } catch {
+      // fall through to client deep delete
+    }
+  }
+
+  const docRef = doc(db, COLL, id);
+
+  // Best-effort storage cleanup if we saved a path
+  try {
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data: any = snap.data();
+      const coverImagePath: string | undefined = data?.coverImagePath;
+      if (coverImagePath) {
+        try {
+          await deleteObject(sref(getStorage(app), coverImagePath));
+        } catch {}
+      }
+    }
+  } catch {}
+
+  // Delete known subcollections
+  try {
+    await deleteSubcollection(`${COLL}/${id}/participants`);
+  } catch {}
+
+  // Finally delete the campaign document
+  await deleteDoc(docRef);
 }
 
 // Participants
@@ -271,17 +349,22 @@ export async function listParticipants(campaignId: string): Promise<Participant[
 
 // Aggregated metrics (/stats/campaigns)
 export async function getAggregatedMetrics(): Promise<{
-  total?: number;
-  reach?: number;
-  clicks?: number;
-  likes?: number;
+  total?: number; reach?: number; clicks?: number; likes?: number;
 }> {
   const ref = doc(db, "stats", "campaigns");
-  const snap = await getDoc(ref);
+
+  // Force a fresh read to avoid stale cache after deletes/updates
+  let snap;
+  try {
+    snap = await getDocFromServer(ref);
+  } catch {
+    snap = await getDoc(ref);
+  }
+
   if (!snap.exists()) return {};
   const d: any = snap.data();
   return {
-    total: Number(d.total || 0),
+    total: Number((d.totalCount ?? d.total) || 0),
     reach: Number(d.reach || 0),
     clicks: Number(d.clicks || 0),
     likes: Number(d.likes || 0),
@@ -292,25 +375,20 @@ export async function getAggregatedMetrics(): Promise<{
 // Publish / Unpublish with safe callable fallback
 // -------------------------------------
 export async function setPublished(id: string, publish: boolean): Promise<void> {
-  // Read from env (Vite). Defaults: callable disabled, region us-central1.
   const USE_FN =
     (import.meta as any)?.env?.VITE_USE_FN_TOGGLE_PUBLISH === "true";
   const REGION =
     (import.meta as any)?.env?.VITE_FIREBASE_FUNCTIONS_REGION || "us-central1";
 
-  // If callable path is explicitly enabled, try it first
   if (USE_FN) {
     try {
       const fns = getFunctions(app, REGION);
       const toggle = httpsCallable(fns, "togglePublish");
       await toggle({ campaignId: id, publish });
-      return; // success via callable
-    } catch {
-      // Silently fall through to Firestore (avoid breaking UX)
-    }
+      return;
+    } catch {}
   }
 
-  // Firestore fallback (direct write)
   const ref = doc(db, COLL, id);
   const updates: any = {
     status: publish ? "active" : "draft",
@@ -318,7 +396,6 @@ export async function setPublished(id: string, publish: boolean): Promise<void> 
   };
 
   if (publish) {
-    // Ensure startAt exists on first publish
     const snap = await getDoc(ref);
     const hasStart = snap.exists() && !!(snap.data() as any)?.startAt;
     if (!hasStart) updates.startAt = serverTimestamp();

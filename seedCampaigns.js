@@ -1,263 +1,165 @@
-// tools/seed/seedCampaigns.js
-/**
- * Seed 20 production-ready campaigns into Firestore.
- * Usage: npm run seed:campaigns
- *
- * Requires: tools/seed/serviceAccount.json (DO NOT COMMIT)
- */
+/* eslint-disable no-console */
+"use strict";
 
+const fs = require("fs");
 const path = require("path");
 const admin = require("firebase-admin");
 
-// ----- Load service account -----
-const serviceAccountPath =
-  process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-  path.resolve(__dirname, "serviceAccount.json");
+// ---------- Config ----------
+const DEFAULT_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "fameflowr-217f9";
+const COUNT =
+  Number((process.argv.find(a => a.startsWith("--count=")) || "").split("=")[1]) ||
+  Number(process.env.SEED_COUNT) ||
+  20;
 
-admin.initializeApp({
-  credential: admin.credential.cert(require(serviceAccountPath)),
-});
+// ---------- Credential bootstrap ----------
+function resolveServiceAccountPath() {
+  // 1) If GOOGLE_APPLICATION_CREDENTIALS is set, prefer that
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const p = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    if (fs.existsSync(p)) return p;
+    throw new Error(
+      `GOOGLE_APPLICATION_CREDENTIALS points to a missing file:\n${p}`
+    );
+  }
+  // 2) Try serviceAccount.json next to this script
+  const local = path.resolve(__dirname, "serviceAccount.json");
+  if (fs.existsSync(local)) return local;
 
-const db = admin.firestore();
+  // 3) Try project root (one level up)
+  const root = path.resolve(__dirname, "..", "serviceAccount.json");
+  if (fs.existsSync(root)) return root;
 
-/** Prefix keyword generator for simple title search */
-const keywordize = (title) => {
-  return Array.from(
-    new Set(
-      title
-        .toLowerCase()
-        .split(/\s+/)
-        .filter(Boolean)
-        .flatMap((w) => {
-          const parts = [];
-          for (let i = 1; i <= w.length; i++) parts.push(w.slice(0, i));
-          return parts;
-        })
-    )
+  // 4) Last resort: the absolute path you attempted earlier (helps Windows users)
+  const abs = "C:\\Users\\Prasanth\\Projects\\Fameflowr\\serviceAccount.json";
+  if (fs.existsSync(abs)) return abs;
+
+  throw new Error(
+    "Could not find serviceAccount.json.\n" +
+      "Place it next to this script OR set the env var GOOGLE_APPLICATION_CREDENTIALS."
   );
-};
-
-/** Convert ISO to Firestore Timestamp */
-const ts = (iso) => admin.firestore.Timestamp.fromDate(new Date(iso));
-
-/** NOW as Timestamp */
-const nowTs = admin.firestore.Timestamp.now();
-
-// ----- 20 REAL CAMPAIGNS -----
-const campaigns = [
-  {
-    title: "World Photography Day Contest",
-    description:
-      "Share your most stunning photo to celebrate World Photography Day. Top entries will be featured on Fameflowr.",
-    startAt: "2025-08-19T00:00:00.000Z",
-    endAt: "2025-08-26T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1507525428034-b723cf961d3e",
-  },
-  {
-    title: "Fame Your Pet Challenge",
-    description:
-      "Post adorable or hilarious photos of your pet with #FameYourPet. Winner gets Premium membership for 3 months.",
-    startAt: "2025-08-15T00:00:00.000Z",
-    endAt: "2025-08-22T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1558788353-f76d92427f16",
-  },
-  {
-    title: "Street Food Diaries",
-    description:
-      "Celebrate your city's food culture — share your favourite street food photos and stories.",
-    startAt: "2025-08-20T00:00:00.000Z",
-    endAt: "2025-08-30T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1543353071-873f17a7a088",
-  },
-  {
-    title: "Monsoon Vibes",
-    description:
-      "From rain-soaked streets to chai moments — capture the magic of the monsoon season.",
-    startAt: "2025-08-12T00:00:00.000Z",
-    endAt: "2025-08-19T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1503437313881-503a91226422",
-  },
-  {
-    title: "Fitness Transformation Stories",
-    description:
-      "Share your before-and-after fitness journey to inspire the Fameflowr community.",
-    startAt: "2025-08-14T00:00:00.000Z",
-    endAt: "2025-08-28T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1554284126-aa88f22d8b74",
-  },
-  {
-    title: "Travel Throwback",
-    description:
-      "Post your best travel memories from any trip and share the story behind it.",
-    startAt: "2025-08-21T00:00:00.000Z",
-    endAt: "2025-08-31T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1507525428034-b723cf961d3e",
-  },
-  {
-    title: "Home Garden Showcase",
-    description:
-      "Show us your balcony, terrace, or backyard garden setups and tips.",
-    startAt: "2025-08-18T00:00:00.000Z",
-    endAt: "2025-08-25T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1501004318641-b39e6451bec6",
-  },
-  {
-    title: "Festive Fashion Week",
-    description:
-      "Post your best festive outfit looks for the upcoming season.",
-    startAt: "2025-09-01T00:00:00.000Z",
-    endAt: "2025-09-07T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1520975922071-3d92b67dff8e",
-  },
-  {
-    title: "Diwali Lights Challenge",
-    description:
-      "Show off your Diwali decorations and lights for a chance to be featured.",
-    startAt: "2025-10-20T00:00:00.000Z",
-    endAt: "2025-10-25T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1508672019048-805c876b67e2",
-  },
-  {
-    title: "Local Heroes",
-    description:
-      "Highlight someone making a difference in your community.",
-    startAt: "2025-08-22T00:00:00.000Z",
-    endAt: "2025-08-29T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1509099836639-18ba1795216d",
-  },
-  {
-    title: "Nature Close-Up",
-    description:
-      "Post macro shots of flowers, insects, leaves, or natural textures.",
-    startAt: "2025-08-13T00:00:00.000Z",
-    endAt: "2025-08-19T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1501004318641-b39e6451bec6",
-  },
-  {
-    title: "Book Lovers Week",
-    description:
-      "Share your reading list or your cozy reading corner.",
-    startAt: "2025-08-25T00:00:00.000Z",
-    endAt: "2025-08-31T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1512820790803-83ca734da794",
-  },
-  {
-    title: "Weekend Cooking Challenge",
-    description:
-      "Post a picture and recipe of your best home-cooked meal this weekend.",
-    startAt: "2025-08-16T00:00:00.000Z",
-    endAt: "2025-08-18T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1504674900247-0877df9cc836",
-  },
-  {
-    title: "Campus Creators",
-    description:
-      "Showcase creative projects from your college campus — art, tech, or events.",
-    startAt: "2025-09-05T00:00:00.000Z",
-    endAt: "2025-09-15T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1503676260728-1c00da094a0b",
-  },
-  {
-    title: "Made in Home: Small Business Stories",
-    description:
-      "Share your home business journey — products, process, and the people behind it.",
-    startAt: "2025-09-10T00:00:00.000Z",
-    endAt: "2025-09-20T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1515378791036-0648a3ef77b2",
-  },
-  {
-    title: "Eco Habits Challenge",
-    description:
-      "What’s one sustainable habit you follow? Share tips with photos or short videos.",
-    startAt: "2025-08-24T00:00:00.000Z",
-    endAt: "2025-08-31T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1469474968028-56623f02e42e",
-  },
-  {
-    title: "Hidden Talent Spotlight",
-    description:
-      "Show a talent people don’t usually know you have — music, beatbox, magic, anything!",
-    startAt: "2025-08-27T00:00:00.000Z",
-    endAt: "2025-09-03T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1511379938547-c1f69419868d",
-  },
-  {
-    title: "The Great Workspace",
-    description:
-      "Post your desk or creative workspace setup — minimal, cozy, or pro!",
-    startAt: "2025-09-12T00:00:00.000Z",
-    endAt: "2025-09-18T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1498050108023-c5249f4df085",
-  },
-  {
-    title: "Sunrise to Sunset",
-    description:
-      "Capture the sky from dawn to dusk — colors, clouds, and silhouettes.",
-    startAt: "2025-08-29T00:00:00.000Z",
-    endAt: "2025-09-05T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee",
-  },
-  {
-    title: "Festival Food Stories",
-    description:
-      "Share a traditional festive recipe with a photo and the story behind it.",
-    startAt: "2025-11-01T00:00:00.000Z",
-    endAt: "2025-11-10T23:59:59.000Z",
-    imageUrl:
-      "https://images.unsplash.com/photo-1512058564366-18510be2db19",
-  },
-];
-
-async function run() {
-  console.log("Seeding campaigns…");
-
-  const batch = db.batch();
-  const col = db.collection("campaigns");
-
-  campaigns.forEach((c) => {
-    const ref = col.doc(); // auto-id
-    batch.set(ref, {
-      title: c.title,
-      description: c.description || "",
-      imageUrl: c.imageUrl || "",
-      startAt: ts(c.startAt),
-      endAt: ts(c.endAt),
-      participantsCount: 0,
-      clicks: 0,
-      likes: 0,
-      shares: 0,
-      isDeleted: false,
-      titleKeywords: keywordize(c.title),
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    });
-  });
-
-  await batch.commit();
-  console.log(`Done. Seeded ${campaigns.length} campaigns.`);
-  process.exit(0);
 }
 
-run().catch((e) => {
-  console.error(e);
-  process.exit(1);
+function initAdmin() {
+  if (admin.apps.length) return;
+
+  let creds;
+  try {
+    const saPath = resolveServiceAccountPath();
+    creds = JSON.parse(fs.readFileSync(saPath, "utf8"));
+    admin.initializeApp({
+      credential: admin.credential.cert(creds),
+      projectId: creds.project_id || DEFAULT_PROJECT_ID,
+    });
+    console.log("✔ Firebase Admin initialized with service account:", creds.project_id || DEFAULT_PROJECT_ID);
+  } catch (e) {
+    console.warn("Service account not found via file. Trying applicationDefault() …");
+    // Will work if GOOGLE_APPLICATION_CREDENTIALS is set or gcloud auth exists
+    admin.initializeApp({
+      credential: admin.credential.applicationDefault(),
+      projectId: DEFAULT_PROJECT_ID,
+    });
+    console.log("✔ Firebase Admin initialized via applicationDefault()");
+  }
+}
+
+// ---------- Helpers ----------
+const db = () => admin.firestore();
+const nowTs = () => admin.firestore.FieldValue.serverTimestamp();
+
+function keywordize(str) {
+  const tokens = (str || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  // simple prefix list
+  const prefixes = new Set();
+  for (const t of tokens) {
+    for (let i = 1; i <= t.length; i++) prefixes.add(t.slice(0, i));
+  }
+  return Array.from(prefixes);
+}
+
+function randomFrom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function addDays(base, days) {
+  const d = new Date(base.getTime());
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function buildCampaign(i) {
+  const themes = [
+    "Diwali Lights",
+    "Campus Fest",
+    "Local Food Crawl",
+    "Tech Expo",
+    "Monsoon Memories",
+    "Fitness Challenge",
+    "Eco Drive",
+    "Art & Culture Week",
+    "Music Marathon",
+    "Startup Demo Day",
+  ];
+  const cats = ["festival", "campus", "food", "tech", "sports", "arts"];
+  const title = `${randomFrom(themes)} #${String(i + 1).padStart(2, "0")}`;
+
+  const start = addDays(new Date(), -Math.floor(Math.random() * 30));
+  const end = addDays(start, 7 + Math.floor(Math.random() * 21));
+
+  return {
+    title,
+    description:
+      "Join our community campaign and share your best moments. Engage with posts, invite friends, and climb the leaderboard!",
+    category: randomFrom(cats),
+    imageUrl: "", // put a CDN URL if you want
+    startAt: start,
+    endAt: end,
+    participantsCount: 0,
+    reach: 0,
+    clicks: 0,
+    likes: 0,
+    shares: 0,
+    isDeleted: false,
+    titleKeywords: keywordize(title),
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+    visibility: "public",
+    status: "draft", // or "published"
+  };
+}
+
+async function seedCampaigns(count) {
+  initAdmin();
+  const firestore = db();
+
+  console.log(`Seeding ${count} campaigns into 'campaigns'…`);
+  const chunkSize = 400; // under the 500 ops limit
+  let created = 0;
+
+  for (let offset = 0; offset < count; offset += chunkSize) {
+    const batch = firestore.batch();
+    const limit = Math.min(chunkSize, count - offset);
+
+    for (let i = 0; i < limit; i++) {
+      const campaign = buildCampaign(offset + i);
+      const ref = firestore.collection("campaigns").doc(); // auto-ID
+      batch.set(ref, campaign);
+    }
+
+    await batch.commit();
+    created += limit;
+    console.log(`… committed ${created}/${count}`);
+  }
+
+  console.log("✅ Done. Triggered Cloud Functions will update stats automatically.");
+}
+
+// Run
+seedCampaigns(COUNT).catch((e) => {
+  console.error("Seed failed:", e);
+  process.exitCode = 1;
 });

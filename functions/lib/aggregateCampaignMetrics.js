@@ -33,29 +33,72 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.recalcAndWriteTotals = recalcAndWriteTotals;
 exports.aggregateCampaignMetrics = aggregateCampaignMetrics;
 exports.scheduledAggregateCampaignMetrics = scheduledAggregateCampaignMetrics;
+// functions/src/aggregateCampaignMetrics.ts
 const admin = __importStar(require("firebase-admin"));
-async function aggregateCampaignMetrics(change, context) {
-    const after = change.after.exists ? change.after.data() : null;
-    const before = change.before.exists ? change.before.data() : null;
-    if (!after)
-        return;
-    const campaignId = context.params.campaignId;
+const STATS_PATH = "stats/campaigns";
+const nowTs = () => admin.firestore.FieldValue.serverTimestamp();
+const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+/**
+ * Recalculate total from source of truth, writing BOTH `total` and `totalCount`
+ * so the UI can read either key safely. Lazy-get Firestore to avoid init order issues.
+ */
+async function recalcAndWriteTotals(dbArg) {
+    const db = dbArg ?? admin.firestore();
+    let total = 0;
+    try {
+        // Prefer aggregate count()
+        const anyDb = db;
+        const agg = await anyDb.collection("campaigns").count().get();
+        total = agg.data().count ?? 0;
+    }
+    catch {
+        // Fallback scan
+        const snap = await db.collection("campaigns").get();
+        total = snap.size;
+    }
+    await db.doc(STATS_PATH).set({ total, totalCount: total, updatedAt: nowTs() }, { merge: true });
+}
+/**
+ * Incremental aggregator on create/update/delete of /campaigns/{id}.
+ * IMPORTANT: does NOT write back to /campaigns to avoid trigger loops.
+ */
+async function aggregateCampaignMetrics(change, _context) {
     const db = admin.firestore();
-    // Example aggregation: update lastUpdated timestamp
-    await db.collection("campaigns").doc(campaignId).set({
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+    const before = change.before.exists ? change.before.data() : null;
+    const after = change.after.exists ? change.after.data() : null;
+    let totalDelta = 0;
+    if (!before && after)
+        totalDelta = 1; // created
+    if (before && !after)
+        totalDelta = -1; // deleted
+    const reachDelta = num(after?.reach) - num(before?.reach);
+    const clicksDelta = num(after?.clicks) - num(before?.clicks);
+    const likesDelta = num(after?.likes) - num(before?.likes);
+    const inc = admin.firestore.FieldValue.increment;
+    await db.doc(STATS_PATH).set({
+        ...(totalDelta !== 0 ? { total: inc(totalDelta), totalCount: inc(totalDelta) } : {}),
+        ...(reachDelta !== 0 ? { reach: inc(reachDelta) } : {}),
+        ...(clicksDelta !== 0 ? { clicks: inc(clicksDelta) } : {}),
+        ...(likesDelta !== 0 ? { likes: inc(likesDelta) } : {}),
+        updatedAt: nowTs(),
     }, { merge: true });
 }
+/**
+ * Periodic full recompute (safety net). Wire from index.ts as a scheduled job.
+ */
 async function scheduledAggregateCampaignMetrics() {
     const db = admin.firestore();
-    const campaigns = await db.collection("campaigns").get();
-    const batch = db.batch();
-    campaigns.forEach((doc) => {
-        batch.update(doc.ref, {
-            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-        });
+    const snap = await db.collection("campaigns").select("reach", "clicks", "likes").get();
+    let total = 0, reach = 0, clicks = 0, likes = 0;
+    snap.forEach(d => {
+        const doc = d.data();
+        total += 1;
+        reach += num(doc.reach);
+        clicks += num(doc.clicks);
+        likes += num(doc.likes);
     });
-    await batch.commit();
+    await db.doc(STATS_PATH).set({ total, totalCount: total, reach, clicks, likes, updatedAt: nowTs() }, { merge: true });
 }

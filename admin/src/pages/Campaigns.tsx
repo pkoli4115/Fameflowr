@@ -1,3 +1,4 @@
+// FILE: src/pages/Campaigns.tsx
 import React, { useEffect, useState } from "react";
 import {
   Campaign,
@@ -13,7 +14,7 @@ import {
   getAggregatedMetrics,
   getCountsSafe,
   updateCampaign,
-  setPublished, // ← add
+  setPublished,
 } from "../firebase/campaignApi";
 
 import CampaignToolbar from "../components/campaigns/CampaignToolbar";
@@ -25,13 +26,15 @@ import ParticipantDrawer from "../components/campaigns/ParticipantDrawer";
 import ConfirmDialog from "../components/common/ConfirmDialog";
 import { usePersistedState } from "../hooks/usePersistedState";
 
+type Agg = { total?: number; reach?: number; clicks?: number; likes?: number };
+
 export default function CampaignsPage() {
   const [items, setItems] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [counts, setCounts] = useState<CampaignCounts | null>(null);
-  const [agg, setAgg] = useState<{ total?: number; reach?: number; clicks?: number; likes?: number }>({});
+  const [agg, setAgg] = useState<Agg>({});
 
   // Persisted filters & view
   const [search, setSearch] = usePersistedState("c_search", "");
@@ -91,6 +94,7 @@ export default function CampaignsPage() {
     try {
       const [c, a] = await Promise.all([getCountsSafe(), getAggregatedMetrics()]);
       setCounts(c);
+      // prefer backend metrics (totalCount) but fall back to counts if empty
       setAgg(a && (a.total ?? a.reach ?? a.clicks ?? a.likes) ? a : { total: c.total, reach: 0, clicks: 0, likes: 0 });
     } catch (e) {
       console.warn("[Campaigns] loadCountsAndAgg failed", e);
@@ -225,7 +229,7 @@ export default function CampaignsPage() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  {/* NEW: Publish/Unpublish in grid view */}
+                  {/* Publish/Unpublish in grid view */}
                   <button
                     onClick={() => onPublish(c)}
                     disabled={c.status === "completed" || c.status === "archived" || isPending(c.id)}
@@ -261,7 +265,6 @@ export default function CampaignsPage() {
             ) : (
               <div className="flex items-center">
                 <div className="flex-1">
-                  {/* Pass onPublish down to the row for list view */}
                   <CampaignRow item={c} onEdit={onEdit} onDelete={onDeleteClick} onPublish={onPublish} />
                 </div>
                 <div className="ml-2 hidden md:block">
